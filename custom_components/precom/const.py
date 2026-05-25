@@ -60,6 +60,7 @@ ATTR_NOT_AVAILABLE_SCHEDULED = "not_available_scheduled"
 
 # Groups sensor attribute keys
 ATTR_GROUPS = "groups"
+ATTR_GROUP_ID = "group_id"
 
 # Staffing sensor attribute keys
 ATTR_GROUP_LABEL = "group_label"

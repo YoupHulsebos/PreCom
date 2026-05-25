@@ -55,6 +55,9 @@
             },
             "groups": {
                 "name": "Groups"
+            },
+            "group_alarm": {
+                "name": "{group_label} alarm"
             }
         },
         "binary_sensor": {

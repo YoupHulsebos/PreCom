@@ -16,6 +16,32 @@ from .htmlscraper import PreComHtmlScraper, PreComPortalError
 _LOGGER = logging.getLogger(__name__)
 
 
+class GroupAlarmData:
+    """Container for alarm data specific to a single group."""
+
+    def __init__(
+        self,
+        group_id: str,
+        group_label: str,
+        alarm_id: str,
+        text: str,
+        timestamp: str,
+        functions: list[dict[str, Any]],
+        response_data: list[dict[str, Any]],
+        benodigd: list[dict[str, Any]],
+        voorgestelde_functies: list[dict[str, Any]],
+    ) -> None:
+        self.group_id = group_id
+        self.group_label = group_label
+        self.alarm_id = alarm_id      # alarm ID string, or STATE_NO_ALARM
+        self.text = text              # alarm message text
+        self.timestamp = timestamp    # alarm date/time string from API
+        self.functions = functions    # list of {label: str, users: list[str]}
+        self.response_data = response_data
+        self.benodigd = benodigd
+        self.voorgestelde_functies = voorgestelde_functies
+
+
 class PreComCoordinatorData:
     """Typed container for the data fetched on each polling cycle."""
 
@@ -33,6 +59,7 @@ class PreComCoordinatorData:
         not_available_scheduled: bool,
         groups: list[dict[str, Any]],
         user_groups: list[dict[str, Any]],
+        group_alarms: dict[str, GroupAlarmData],
     ) -> None:
         self.alarm_id = alarm_id      # alarm ID string, or STATE_NO_ALARM
         self.functions = functions    # list of {label: str, users: list[str]}
@@ -46,6 +73,7 @@ class PreComCoordinatorData:
         self.not_available_scheduled = not_available_scheduled  # scheduled absence
         self.groups = groups          # list of group dicts from GetAllGroups
         self.user_groups = user_groups  # list of group dicts from GetAllUserGroups (today)
+        self.group_alarms = group_alarms  # dict of GroupID -> GroupAlarmData
 
 
 class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
@@ -78,35 +106,52 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
 
     async def _fetch_alarms(self) -> list[dict]:
         """Fetch alarms, re-authenticating once on token rejection."""
+        _LOGGER.debug("API call: GetAlarmMessages")
         try:
-            return await self.client.get_alarm_messages()
+            alarms = await self.client.get_alarm_messages()
+            _LOGGER.debug("API call: GetAlarmMessages completed - %d alarms received", len(alarms))
+            return alarms
         except PreComAuthError:
             pass
 
         # Token was rejected — re-authenticate and retry once.
         _LOGGER.debug("PreCom token rejected, re-authenticating")
         await self.client.authenticate()
-        return await self.client.get_alarm_messages()
+        alarms = await self.client.get_alarm_messages()
+        _LOGGER.debug("API call: GetAlarmMessages retry completed - %d alarms received", len(alarms))
+        return alarms
 
     async def _fetch_user_info(self) -> dict:
         """Fetch user info, re-authenticating once on token rejection."""
+        _LOGGER.debug("API call: GetUserInfo")
         try:
-            return await self.client.get_user_info()
+            user_info = await self.client.get_user_info()
+            _LOGGER.debug("API call: GetUserInfo completed")
+            return user_info
         except PreComAuthError:
             pass
 
+        _LOGGER.debug("API call: GetUserInfo - retrying after re-authentication")
         await self.client.authenticate()
-        return await self.client.get_user_info()
+        user_info = await self.client.get_user_info()
+        _LOGGER.debug("API call: GetUserInfo retry completed")
+        return user_info
 
     async def _fetch_groups(self) -> list[dict]:
         """Fetch all groups, re-authenticating once on token rejection."""
+        _LOGGER.debug("API call: GetAllGroups")
         try:
-            return await self.client.get_all_groups()
+            groups = await self.client.get_all_groups()
+            _LOGGER.debug("API call: GetAllGroups completed - %d groups received", len(groups))
+            return groups
         except PreComAuthError:
             pass
 
+        _LOGGER.debug("API call: GetAllGroups - retrying after re-authentication")
         await self.client.authenticate()
-        return await self.client.get_all_groups()
+        groups = await self.client.get_all_groups()
+        _LOGGER.debug("API call: GetAllGroups retry completed - %d groups received", len(groups))
+        return groups
 
     async def _fetch_user_groups(self) -> list[dict]:
         """Fetch user's groups for today and tomorrow with populated ServiceFuntions.
@@ -116,21 +161,26 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
         the next 24 hours can be evaluated at 15-minute granularity.
         DayTotals from tomorrow are merged into today's response.
         """
+        _LOGGER.debug("API call: GetAllUserGroups")
         try:
             groups = await self.client.get_all_user_groups()
         except PreComAuthError:
+            _LOGGER.debug("API call: GetAllUserGroups - retrying after re-authentication")
             await self.client.authenticate()
             groups = await self.client.get_all_user_groups()
-
+        
+        _LOGGER.debug("API call: GetAllUserGroups completed - %d groups received", len(groups))
         now = datetime.now(timezone.utc)
         today = now.strftime("%Y-%m-%dT%H:%M:%S")
         tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
         enriched: list[dict] = []
         for group in groups:
             group_id = group.get("GroupID")
+            group_label = group.get("Label", f"Group {group_id}")
             if group_id is None:
                 enriched.append(group)
                 continue
+            _LOGGER.debug("API call: GetAllFunctions for group '%s' (ID=%s)", group_label, group_id)
             try:
                 full_today = await self.client.get_group_functions(group_id, today)
                 # Fetch tomorrow to cover the full next-24h window.
@@ -155,14 +205,17 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                         err,
                     )
                 enriched.append(full_today)
+                _LOGGER.debug("API call: GetAllFunctions completed for group '%s'", group_label)
             except (PreComAuthError, PreComApiError) as err:
                 _LOGGER.warning(
                     "Could not fetch functions for group %s (%s): %s",
-                    group.get("Label"),
+                    group_label,
                     group_id,
                     err,
                 )
                 enriched.append(group)
+        
+        _LOGGER.debug("Enriched %d user groups with function data", len(enriched))
         return enriched
 
     def _mark_unavailable(self, reason: str) -> None:
@@ -177,18 +230,168 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
             _LOGGER.info("PreCom API connection restored")
             self._unavailable = False
 
+    async def _build_group_alarms(
+        self,
+        user_groups: list[dict],
+    ) -> dict[str, GroupAlarmData]:
+        """Build a mapping of GroupID -> GroupAlarmData for each user group.
+
+        For each group in user_groups, scrapes the portal to find the newest alarm.
+        Fetches full alarm details (response_data, benodigd, voorgestelde_functies)
+        via HTML scraping.
+
+        Groups without active alarms get an entry with alarm_id = STATE_NO_ALARM.
+        
+        Note: This method uses ONLY portal scraping, not the API, to find alarms.
+        This allows finding historical alarms beyond the API's retention period.
+        """
+        _LOGGER.debug(
+            "Building group alarms: %d user groups",
+            len(user_groups),
+        )
+        
+        group_alarms: dict[str, GroupAlarmData] = {}
+
+        # Process each user group by scraping the portal
+        for group in user_groups:
+            group_id = str(group.get("GroupID", ""))
+            group_label = str(group.get("Label", f"Group {group_id}"))
+
+            if not group_id:
+                _LOGGER.debug("Skipping group without GroupID: %s", group)
+                continue
+
+            _LOGGER.debug(
+                "Portal scraping: Searching for latest alarm in group '%s' (ID=%s)",
+                group_label,
+                group_id,
+            )
+
+            # Scrape portal for this group's latest alarm
+            try:
+                alarm_data = await self.htmlscraper.get_latest_alarm_for_group(
+                    group_id, group_label
+                )
+            except PreComPortalError as err:
+                _LOGGER.warning(
+                    "Portal scraping failed for group '%s' (ID=%s): %s",
+                    group_label,
+                    group_id,
+                    err,
+                )
+                # Create empty entry on scraping failure
+                group_alarms[group_id] = GroupAlarmData(
+                    group_id=group_id,
+                    group_label=group_label,
+                    alarm_id=STATE_NO_ALARM,
+                    text="",
+                    timestamp="",
+                    functions=[],
+                    response_data=[],
+                    benodigd=[],
+                    voorgestelde_functies=[],
+                )
+                continue
+
+            if alarm_data is None:
+                # No alarm found for this group
+                _LOGGER.debug(
+                    "Group '%s' (ID=%s): No alarms found in portal (searched last 30 days)",
+                    group_label,
+                    group_id,
+                )
+                group_alarms[group_id] = GroupAlarmData(
+                    group_id=group_id,
+                    group_label=group_label,
+                    alarm_id=STATE_NO_ALARM,
+                    text="",
+                    timestamp="",
+                    functions=[],
+                    response_data=[],
+                    benodigd=[],
+                    voorgestelde_functies=[],
+                )
+                continue
+
+            # Alarm found - extract data
+            alarm_id = alarm_data.get("alarm_id", STATE_NO_ALARM)
+            text = alarm_data.get("text", "")
+            raw_ts = alarm_data.get("timestamp", "")
+            
+            # Parse timestamp
+            timestamp = ""
+            if raw_ts:
+                try:
+                    # Portal returns ISO format or datetime string
+                    if isinstance(raw_ts, str):
+                        dt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+                    else:
+                        dt = raw_ts
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    timestamp = dt.isoformat()
+                except (ValueError, AttributeError) as err:
+                    _LOGGER.debug("Could not parse timestamp '%s': %s", raw_ts, err)
+                    timestamp = str(raw_ts)
+
+            _LOGGER.debug(
+                "Group '%s' (ID=%s): Found alarm MsgInLogID=%s, Text='%s', Timestamp=%s",
+                group_label,
+                group_id,
+                alarm_id,
+                text[:100] if text else "",
+                timestamp,
+            )
+            
+            response_data = alarm_data.get("response_data", [])
+            benodigd = alarm_data.get("benodigd", [])
+            voorgestelde_functies = alarm_data.get("voorgestelde_functies", [])
+            
+            _LOGGER.debug(
+                "Group '%s': Portal details - %d responses, %d benodigd, %d voorgestelde functies",
+                group_label,
+                len(response_data),
+                len(benodigd),
+                len(voorgestelde_functies),
+            )
+
+            group_alarms[group_id] = GroupAlarmData(
+                group_id=group_id,
+                group_label=group_label,
+                alarm_id=alarm_id,
+                text=text,
+                timestamp=timestamp,
+                functions=[],  # Not available from portal scraping
+                response_data=response_data,
+                benodigd=benodigd,
+                voorgestelde_functies=voorgestelde_functies,
+            )
+
+        _LOGGER.debug(
+            "Built %d group alarms (%d with active alarms, %d without)",
+            len(group_alarms),
+            sum(1 for ga in group_alarms.values() if ga.alarm_id != STATE_NO_ALARM),
+            sum(1 for ga in group_alarms.values() if ga.alarm_id == STATE_NO_ALARM),
+        )
+        return group_alarms
+
     async def _async_update_data(self) -> PreComCoordinatorData:
         """Fetch latest alarm data and user info. Called automatically by HA on each interval."""
+        _LOGGER.debug("=== PreCom coordinator update started ===")
+        
         try:
             alarms = await self._fetch_alarms()
             user_info = await self._fetch_user_info()
             groups = await self._fetch_groups()
             user_groups = await self._fetch_user_groups()
+            _LOGGER.debug("All API calls completed successfully")
         except PreComAuthError as err:
+            _LOGGER.error("Update failed: authentication error - %s", err)
             self._mark_unavailable(f"authentication failed after token refresh: {err}")
             self._entry.async_start_reauth(self.hass)
             raise UpdateFailed(f"PreCom auth failed: {err}") from err
         except PreComApiError as err:
+            _LOGGER.error("Update failed: API error - %s", err)
             self._mark_unavailable(f"API error: {err}")
             raise UpdateFailed(f"PreCom API error: {err}") from err
 
@@ -210,7 +413,13 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
             except ValueError:
                 not_available_timestamp = str(raw_na_ts)
 
+        # Build group-specific alarm data
+        _LOGGER.debug("Building group-specific alarm data via portal scraping")
+        group_alarms = await self._build_group_alarms(user_groups)
+        _LOGGER.debug("Group alarm data built successfully")
+
         if not alarms:
+            _LOGGER.debug("No alarms present, returning empty coordinator data")
             return PreComCoordinatorData(
                 alarm_id=STATE_NO_ALARM,
                 functions=[],
@@ -224,11 +433,13 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                 not_available_scheduled=not_available_scheduled,
                 groups=groups,
                 user_groups=user_groups,
+                group_alarms=group_alarms,
             )
 
         latest = alarms[0]
         alarm_id = str(latest.get("MsgInID", STATE_NO_ALARM))
         text = str(latest.get("Text", ""))
+        _LOGGER.debug("Processing latest alarm: MsgInID=%s, Text='%s'", alarm_id, text[:100] if text else "")
 
         # The API returns Timestamp as an ISO 8601 date-time string.
         # Parse it and attach UTC if no timezone is present.
@@ -259,11 +470,18 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
         voorgestelde_functies: list[dict[str, Any]] = []
         if text:
             try:
+                _LOGGER.debug("Fetching portal details for latest alarm")
                 portal_details = await self.htmlscraper.get_alarm_portal_details(text)
                 response_data = portal_details.get("response_data", [])
                 benodigd = portal_details.get("benodigd", [])
                 voorgestelde_functies = portal_details.get(
                     "voorgestelde_functies", []
+                )
+                _LOGGER.debug(
+                    "Portal details for latest alarm: %d responses, %d benodigd, %d voorgestelde functies",
+                    len(response_data),
+                    len(benodigd),
+                    len(voorgestelde_functies),
                 )
             except PreComPortalError as err:
                 _LOGGER.warning(
@@ -272,6 +490,7 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                     err,
                 )
 
+        _LOGGER.debug("=== PreCom coordinator update completed successfully ===")
         return PreComCoordinatorData(
             alarm_id=alarm_id,
             functions=functions,
@@ -285,6 +504,7 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
             not_available_scheduled=not_available_scheduled,
             groups=groups,
             user_groups=user_groups,
+            group_alarms=group_alarms,
         )
 
     async def async_set_unavailable(self, hours: int) -> None:

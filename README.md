@@ -39,6 +39,7 @@ Credentials are validated against the PreCom API before the entry is saved.
 | Entity | Type | State |
 |--------|------|-------|
 | `sensor.precom_last_alarm` | Sensor | Alarm message text when active, `none` when idle |
+| `sensor.precom_<group>_alarm` | Sensor (per group) | Latest alarm text for this group, `none` when no recent alarm |
 | `sensor.precom_groups` | Sensor | Number of groups the user belongs to |
 | `binary_sensor.precom_availability` | Binary sensor | `on` = available, `off` = unavailable |
 | `binary_sensor.precom_staffing_<function>` | Binary sensor (per function) | `on` = staffing in next 24 h, `off` = sufficient |
@@ -70,6 +71,23 @@ Credentials are validated against the PreCom API before the entry is saved.
 |-----------|-------------|
 | `not_available_timestamp` | ISO timestamp when unavailability was set |
 | `not_available_scheduled` | `true` when the absence is scheduler-driven |
+
+### Group alarm sensor attributes
+
+One sensor is created per group (e.g. `sensor.precom_velp_frb_en_vk_alarm`). The sensor shows the latest alarm for that specific group from the past 30 days. The state is the alarm message text or `none` when no recent alarm is found.
+
+| Attribute | Description |
+|-----------|-------------|
+| `group_id` | Internal group ID |
+| `group_label` | Group name (e.g. "Velp FRB en VK") |
+| `alarm_id` | Internal alarm ID (MsgInLogID from portal) |
+| `text` | Alarm message text (same as entity state) |
+| `timestamp` | Date/time of the alarm from the portal |
+| `response_data` | List of `{FullName, ResponseTime, Available, Response}` rows from the portal report |
+| `benodigd` | List of `{Naam, Aantal, Percentage}` rows from the portal staffing summary |
+| `voorgestelde_functies` | List of `{FunctieNaam, FullName}` rows from the portal proposed-function section |
+
+**Note:** Group alarm sensors use portal scraping with a 30-day lookback window. This allows viewing historical alarms beyond the API's retention period. Data is updated every scan interval.
 
 ### Staffing sensor attributes
 
@@ -144,6 +162,7 @@ No webhooks or push mechanisms are used.
 ## Use cases
 
 - **Alarm notifications** — trigger a mobile notification, flash a light, or start a siren whenever `sensor.precom_last_alarm` changes to a non-`none` value.
+- **Group-specific alarms** — monitor individual groups with `sensor.precom_<group>_alarm` to track alarms per station or unit, with 30-day history.
 - **Automatic availability reporting** — use a device tracker or input boolean to automatically call `precom.set_unavailable` when you leave home.
 - **Dashboard card** — display the latest alarm text and staffing levels on a Lovelace dashboard.
 - **Understaffing alerts** — use the staffing binary sensors to send a notification when your fire station is short on a specific function in the coming hours.
@@ -154,6 +173,7 @@ No webhooks or push mechanisms are used.
 | Platform | Entity | State | Notes |
 |----------|--------|-------|-------|
 | Sensor | `sensor.precom_last_alarm` | Alarm text or `none` | Attributes: `alarm_id`, `text`, `timestamp`, `functions`, `functions_formatted`, `ResponseData`, `Benodigd`, `VoorgesteldeFuncties`, `last_updated` |
+| Sensor | `sensor.precom_<group>_alarm` | Alarm text or `none` | Per group sensor with 30-day portal history. Attributes: `group_id`, `group_label`, `alarm_id`, `text`, `timestamp`, `response_data`, `benodigd`, `voorgestelde_functies` |
 | Sensor | `sensor.precom_groups` | Number of groups | Attributes: `groups`, `last_updated` |
 | Binary sensor | `binary_sensor.precom_availability` | `on` = available | Attributes: `not_available_timestamp`, `not_available_scheduled` |
 | Binary sensor | `binary_sensor.precom_staffing_<function>` | `on` = staffing | Attributes: `number_needed`, `current_available`, `current_unavailable`, `shortage` |
@@ -170,8 +190,9 @@ No webhooks or push mechanisms are used.
 - **Polling only** — no push support; minimum latency equals the configured scan interval.
 - **No P2000 raw messages** — alarm data is what PreCom exposes via its own API; raw P2000 data is not available.
 - **Single device per entry** — each config entry covers one PreCom account. Multiple accounts require multiple entries.
-- **No alarm history** — only the latest alarm is exposed. Historical alarms are not stored or surfaced.
-- **Staffing sensors are dynamic** — sensors are added as new functions are discovered during polling. Removing a function from PreCom does not automatically remove the corresponding entity from Home Assistant.
+- **Limited alarm history** — `sensor.precom_last_alarm` shows only the current active alarm. Group sensors (`sensor.precom_<group>_alarm`) show the latest alarm from the past 30 days per group via portal scraping.
+- **Dynamic sensors** — group sensors and staffing sensors are created dynamically after the first successful poll. Removing a group or function from PreCom does not automatically remove the corresponding entity from Home Assistant.
+- **Portal scraping overhead** — group alarm sensors scrape the portal per group per update cycle. For accounts with many groups, consider increasing the scan interval to reduce load.
 
 ## Removing the integration
 
