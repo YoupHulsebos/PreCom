@@ -427,16 +427,18 @@ class PreComHtmlScraper:
     def _resolve_search_url_from_overview_html(
         self, overview_html: str, group_id: str
     ) -> str:
-        """Build the report search URL using the same inputs as the portal UI."""
-        from_value = self._extract_input_value(overview_html, "From")
-        to_value = self._extract_input_value(overview_html, "To")
+        """Build the report search URL, looking back 30 days from now.
+        
+        The portal's default From/To values are ignored to ensure we always
+        search the last 30 days, regardless of the portal's current settings.
+        """
+        from datetime import timedelta
         working_day = self._extract_input_value(overview_html, "PeriodPartSelection")
 
-        try:
-            from_dt = datetime.strptime(from_value, "%d-%m-%Y %H:%M:%S")
-            to_dt = datetime.strptime(to_value, "%d-%m-%Y %H:%M:%S")
-        except ValueError as err:
-            raise PreComPortalError("Could not parse From/To values from overview HTML") from err
+        # Always search the last 30 days to ensure we find recent alarms
+        now = datetime.now()
+        from_dt = now - timedelta(days=30)
+        to_dt = now
 
         return str(
             URL(f"{PORTAL_BASE_URL}/ReportMessage/Search").with_query(
@@ -593,6 +595,84 @@ class PreComHtmlScraper:
         response_data = self._parse_response_data(response_payload)
 
         return {
+            "response_data": response_data,
+            "benodigd": benodigd,
+            "voorgestelde_functies": voorgestelde_functies,
+        }
+
+    async def get_latest_alarm_for_group(
+        self, group_id: str, group_label: str
+    ) -> dict[str, Any] | None:
+        """Fetch the latest alarm and its details for a specific group from the portal.
+        
+        Args:
+            group_id: The numeric group ID to search for.
+            group_label: The group label (for logging).
+            
+        Returns:
+            Dict with alarm data if found, None if no alarms for this group.
+            Dict contains: alarm_id, text, timestamp, response_data, benodigd, voorgestelde_functies
+        """
+        await self._portal_login()
+        await self._portal_prepare_report_context()
+
+        overview_html = await self._portal_request_text(
+            "GET",
+            PORTAL_OVERVIEW_URL,
+            headers=self._portal_ajax_html_headers(),
+        )
+
+        # Search specifically for this group
+        search_url = self._resolve_search_url_from_overview_html(overview_html, group_id)
+        search_html = await self._portal_request_text(
+            "GET",
+            search_url,
+            headers=self._portal_ajax_html_headers(),
+        )
+        search_message_url = self._resolve_search_message_url_from_html(search_html)
+        search_message_payload = await self._portal_request_json(
+            "GET",
+            search_message_url,
+            headers=self._portal_ajax_json_headers(),
+            expected_type=dict,
+        )
+        
+        rows = search_message_payload.get("Data", [])
+        if not isinstance(rows, list) or not rows:
+            # No messages found for this group
+            return None
+        
+        # Take the first message (newest)
+        latest_message = rows[0]
+        
+        # Extract basic alarm info
+        alarm_id = str(latest_message.get("MsgInLogID", ""))
+        text = str(latest_message.get("Text", ""))
+        timestamp = latest_message.get("Timestamp", "")
+        
+        # Fetch portal details
+        message_details_html = await self._portal_request_text(
+            "GET",
+            self._build_message_details_url(latest_message),
+            headers=self._portal_ajax_html_headers(),
+        )
+        response_payload = await self._portal_request_json(
+            "POST",
+            self._build_search_response_url(latest_message),
+            headers=self._portal_form_headers(PORTAL_OVERVIEW_URL),
+            data={"sort": "", "group": "", "filter": ""},
+            expected_type=dict,
+        )
+
+        benodigd, voorgestelde_functies = self._parse_message_details_html(
+            message_details_html
+        )
+        response_data = self._parse_response_data(response_payload)
+
+        return {
+            "alarm_id": alarm_id,
+            "text": text,
+            "timestamp": timestamp,
             "response_data": response_data,
             "benodigd": benodigd,
             "voorgestelde_functies": voorgestelde_functies,
