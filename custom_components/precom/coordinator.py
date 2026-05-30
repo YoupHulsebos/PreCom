@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
@@ -11,9 +12,37 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import PreComApiClient, PreComAuthError, PreComApiError
 from .const import DOMAIN, STATE_NO_ALARM
+from .geocoder import PreComGeocoder
 from .htmlscraper import PreComHtmlScraper, PreComPortalError
 
 _LOGGER = logging.getLogger(__name__)
+
+# Regex to extract the address from a P2000-style alarm message text.
+# Named group 'adres' captures the address portion between the incident type and the postcode.
+_ADRES_RE = re.compile(
+    r"^P\s+\d+(?:\s+BON-\d+)?\s+(?:\([^)]*\)\s+)*"
+    r"(?:Reanimatie|Ass\.\s+Ambu|BR\s+(?:berm\/bosschage|buiten\s+industrie|afval|woning|bos|bijgebouw|wegvervoer|gebouw|container|gezondheidszorg|industrie)"
+    r"|Nacontrole|Ongeval\s+(?:wegvervoer|gev\.\s+stof)|Liftopsluiting|PAC\s+brandmelding"
+    r"|OMS\s+(?:brandmelding|handmelder)|CO-melder|Persoon\s+te\s+water|Voertuig\s+te\s+water"
+    r"|Dier\s+(?:in\s+problemen|in\s+put\/kelder|in\/op\s+ijs|op\s+hoogte|te\s+water)"
+    r"|Buitensluiting|Stank\/hind\.\s+lucht|Brandgerucht|Wateroverlast|Vervuild\s+wegdek"
+    r"|Stormschade|Ongeval\s+VVE|Dienstverlening)"
+    r"(?:\s+\([^)]*\))*\s+(?P<adres>.+?)(?:\s+\d{6})*\s*$"
+)
+
+
+def extract_adres(text: str) -> str:
+    """Return the address extracted from a P2000 alarm text, or empty string."""
+    if not text:
+        return ""
+    m = _ADRES_RE.match(text)
+    if m:
+        return m.group("adres")
+    return ""
+
+
+# Internal alias used within this module.
+_extract_adres = extract_adres
 
 
 class GroupAlarmData:
@@ -30,6 +59,8 @@ class GroupAlarmData:
         response_data: list[dict[str, Any]],
         benodigd: list[dict[str, Any]],
         voorgestelde_functies: list[dict[str, Any]],
+        adres: str = "",
+        adres_detail: dict | None = None,
     ) -> None:
         self.group_id = group_id
         self.group_label = group_label
@@ -40,6 +71,8 @@ class GroupAlarmData:
         self.response_data = response_data
         self.benodigd = benodigd
         self.voorgestelde_functies = voorgestelde_functies
+        self.adres = adres            # address extracted from alarm text
+        self.adres_detail = adres_detail  # full Nominatim result, or None
 
 
 class PreComCoordinatorData:
@@ -60,6 +93,8 @@ class PreComCoordinatorData:
         groups: list[dict[str, Any]],
         user_groups: list[dict[str, Any]],
         group_alarms: dict[str, GroupAlarmData],
+        adres: str = "",
+        adres_detail: dict | None = None,
     ) -> None:
         self.alarm_id = alarm_id      # alarm ID string, or STATE_NO_ALARM
         self.functions = functions    # list of {label: str, users: list[str]}
@@ -68,6 +103,8 @@ class PreComCoordinatorData:
         self.response_data = response_data
         self.benodigd = benodigd
         self.voorgestelde_functies = voorgestelde_functies
+        self.adres = adres            # address extracted from alarm text
+        self.adres_detail = adres_detail  # full Nominatim result, or None
         self.is_available = is_available              # True when user is available
         self.not_available_timestamp = not_available_timestamp  # ISO ts of unavailability
         self.not_available_scheduled = not_available_scheduled  # scheduled absence
@@ -91,6 +128,7 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
         entry: ConfigEntry,
         client: PreComApiClient,
         htmlscraper: PreComHtmlScraper,
+        geocoder: PreComGeocoder,
         scan_interval: int | None,
     ) -> None:
         super().__init__(
@@ -102,6 +140,7 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
         self._entry = entry
         self.client = client
         self.htmlscraper = htmlscraper
+        self.geocoder = geocoder
         self._unavailable = False
 
     async def _fetch_alarms(self) -> list[dict]:
@@ -290,6 +329,7 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                     response_data=[],
                     benodigd=[],
                     voorgestelde_functies=[],
+                    adres="",
                 )
                 continue
 
@@ -310,6 +350,7 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                     response_data=[],
                     benodigd=[],
                     voorgestelde_functies=[],
+                    adres="",
                 )
                 continue
 
@@ -355,6 +396,8 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                 len(voorgestelde_functies),
             )
 
+            group_adres = _extract_adres(text)
+            group_coords = await self.geocoder.geocode(group_adres) if group_adres else None
             group_alarms[group_id] = GroupAlarmData(
                 group_id=group_id,
                 group_label=group_label,
@@ -365,6 +408,8 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                 response_data=response_data,
                 benodigd=benodigd,
                 voorgestelde_functies=voorgestelde_functies,
+                adres=group_adres,
+                adres_detail=group_coords,
             )
 
         _LOGGER.debug(
@@ -428,6 +473,7 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                 response_data=[],
                 benodigd=[],
                 voorgestelde_functies=[],
+                adres="",
                 is_available=is_available,
                 not_available_timestamp=not_available_timestamp,
                 not_available_scheduled=not_available_scheduled,
@@ -491,6 +537,8 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                 )
 
         _LOGGER.debug("=== PreCom coordinator update completed successfully ===")
+        adres = _extract_adres(text)
+        coords = await self.geocoder.geocode(adres) if adres else None
         return PreComCoordinatorData(
             alarm_id=alarm_id,
             functions=functions,
@@ -499,6 +547,8 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
             response_data=response_data,
             benodigd=benodigd,
             voorgestelde_functies=voorgestelde_functies,
+            adres=adres,
+            adres_detail=coords,
             is_available=is_available,
             not_available_timestamp=not_available_timestamp,
             not_available_scheduled=not_available_scheduled,

@@ -52,3 +52,17 @@ get_alarm_portal_details:
       example: P 2 BON-04 BR afval Paasberglaan Arnhem 075341
       selector:
         text:
+
+geocode_melding:
+  name: Geocode Melding
+  description: >
+    Extract the address from a P2000 alarm message text and return the full
+    Nominatim geocoding result (including lat, lon, display_name, etc.).
+  fields:
+    melding:
+      name: Melding
+      description: The P2000 alarm message text to extract an address from and geocode.
+      required: true
+      example: P 2 BON-04 BR afval Paasberglaan 075341
+      selector:
+        text:
