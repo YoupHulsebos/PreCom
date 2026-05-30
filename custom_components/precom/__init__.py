@@ -17,8 +17,10 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     SERVICE_GET_ALARM_PORTAL_DETAILS,
+    SERVICE_GEOCODE_MELDING,
 )
-from .coordinator import PreComCoordinator
+from .coordinator import PreComCoordinator, extract_adres as _extract_adres
+from .geocoder import PreComGeocoder
 from .htmlscraper import PreComHtmlScraper, PreComPortalError
 
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BINARY_SENSOR]
@@ -46,8 +48,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: PreComConfigEntry) -> bo
     htmlscraper = PreComHtmlScraper(
         username=username, password=password, session=session
     )
+    geocoder = PreComGeocoder(session=session)
     coordinator = PreComCoordinator(
-        hass, entry, client, htmlscraper, scan_interval
+        hass, entry, client, htmlscraper, geocoder, scan_interval
     )
 
     # Raises ConfigEntryNotReady on failure; HA will retry with backoff.
@@ -60,6 +63,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: PreComConfigEntry) -> bo
             DOMAIN,
             SERVICE_GET_ALARM_PORTAL_DETAILS,
             _make_get_alarm_portal_details_handler(hass),
+            schema=GET_ALARM_PORTAL_DETAILS_SCHEMA,
+            supports_response=SupportsResponse.ONLY,
+        )
+
+    if not hass.services.has_service(DOMAIN, SERVICE_GEOCODE_MELDING):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_GEOCODE_MELDING,
+            _make_geocode_melding_handler(hass),
             schema=GET_ALARM_PORTAL_DETAILS_SCHEMA,
             supports_response=SupportsResponse.ONLY,
         )
@@ -84,6 +96,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: PreComConfigEntry) -> b
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok and len(hass.config_entries.async_entries(DOMAIN)) <= 1:
         hass.services.async_remove(DOMAIN, SERVICE_GET_ALARM_PORTAL_DETAILS)
+        hass.services.async_remove(DOMAIN, SERVICE_GEOCODE_MELDING)
     return unload_ok
 
 
@@ -118,5 +131,28 @@ def _make_get_alarm_portal_details_handler(hass: HomeAssistant):
             "benodigd": details.get("benodigd", []),
             "voorgestelde_functies": details.get("voorgestelde_functies", []),
         }
+
+    return _handle
+
+
+def _make_geocode_melding_handler(hass: HomeAssistant):
+    """Create the domain service handler for geocoding an alarm message text."""
+
+    async def _handle(call: ServiceCall) -> ServiceResponse:
+        melding = str(call.data[ATTR_MELDING]).strip()
+        entries = hass.config_entries.async_entries(DOMAIN)
+        if not entries:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="no_entry_loaded",
+            )
+
+        coordinator = entries[0].runtime_data
+        adres = _extract_adres(melding)
+        if not adres:
+            return {"adres": "", "adres_detail": None}
+
+        detail = await coordinator.geocoder.geocode(adres)
+        return {"adres": adres, "adres_detail": detail}
 
     return _handle

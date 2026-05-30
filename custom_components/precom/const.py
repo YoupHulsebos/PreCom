@@ -35,6 +35,7 @@ SERVICE_SET_UNAVAILABLE = "set_unavailable"
 SERVICE_SET_AVAILABLE = "set_available"
 SERVICE_UPDATE_ALARM = "update_alarm"
 SERVICE_GET_ALARM_PORTAL_DETAILS = "get_alarm_portal_details"
+SERVICE_GEOCODE_MELDING = "geocode_melding"
 
 # Service field names
 ATTR_HOURS = "hours"
@@ -45,6 +46,8 @@ STATE_NO_ALARM = "none"
 
 # Sensor extra attribute keys
 ATTR_ALARM_ID = "alarm_id"
+ATTR_ADDRESS = "adres"
+ATTR_ADDRESS_DETAIL = "adres_detail"
 ATTR_FUNCTIONS = "functions"
 ATTR_FUNCTIONS_FORMATTED = "functions_formatted"
 ATTR_LAST_UPDATED = "last_updated"
