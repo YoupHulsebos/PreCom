@@ -20,7 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 # Regex to extract the address from a P2000-style alarm message text.
 # Named group 'adres' captures the address portion between the incident type and the postcode.
 _ADRES_RE = re.compile(
-    r"^P\s+\d+(?:\s+BON-\d+)?\s+(?:\([^)]*\)\s+)*"
+    r"^P\s+\d+(?:\s+[A-Z]{3}-\d+)?\s+(?:\([^)]*\)\s+)*"
     r"(?:Reanimatie|Ass\.\s+Ambu|BR\s+(?:berm\/bosschage|buiten\s+industrie|afval|woning|bos|bijgebouw|wegvervoer|gebouw|container|gezondheidszorg|industrie)"
     r"|Nacontrole|Ongeval\s+(?:wegvervoer|gev\.\s+stof)|Liftopsluiting|PAC\s+brandmelding"
     r"|OMS\s+(?:brandmelding|handmelder)|CO-melder|Persoon\s+te\s+water|Voertuig\s+te\s+water"
