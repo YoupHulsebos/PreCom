@@ -646,9 +646,10 @@ class PreComHtmlScraper:
         latest_message = rows[0]
         
         # Extract basic alarm info
-        alarm_id = str(latest_message.get("MsgInLogID", ""))
-        text = str(latest_message.get("Text", ""))
-        timestamp = latest_message.get("Timestamp", "")
+        # Use 'or' to handle explicit None values from portal API
+        alarm_id = str(latest_message.get("MsgInLogID") or "")
+        text = str(latest_message.get("Text") or "")
+        timestamp = latest_message.get("Timestamp") or ""
         
         # Fetch portal details
         message_details_html = await self._portal_request_text(
