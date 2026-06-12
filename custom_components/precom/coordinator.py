@@ -61,6 +61,7 @@ class GroupAlarmData:
         voorgestelde_functies: list[dict[str, Any]],
         adres: str = "",
         adres_detail: dict | None = None,
+        scraping_failed: bool = False,
     ) -> None:
         self.group_id = group_id
         self.group_label = group_label
@@ -73,6 +74,25 @@ class GroupAlarmData:
         self.voorgestelde_functies = voorgestelde_functies
         self.adres = adres            # address extracted from alarm text
         self.adres_detail = adres_detail  # full Nominatim result, or None
+        self.scraping_failed = scraping_failed  # True if portal scraping failed
+
+    def __eq__(self, other: object) -> bool:
+        """Compare alarm data for change detection.
+
+        Compares the core alarm state (group_id, alarm_id, text, timestamp, adres).
+        Skips functions (not from portal), response_data/benodigd/voorgestelde_functies
+        (order may vary, enriched asynchronously), adres_detail (geocoding can vary),
+        and scraping_failed (status flag, not alarm content).
+        """
+        if not isinstance(other, GroupAlarmData):
+            return False
+        return (
+            self.group_id == other.group_id
+            and self.alarm_id == other.alarm_id
+            and self.text == other.text
+            and self.timestamp == other.timestamp
+            and self.adres == other.adres
+        )
 
 
 class PreComCoordinatorData:
@@ -112,6 +132,25 @@ class PreComCoordinatorData:
         self.user_groups = user_groups  # list of group dicts from GetAllUserGroups (today)
         self.group_alarms = group_alarms  # dict of GroupID -> GroupAlarmData
 
+    def __eq__(self, other: object) -> bool:
+        """Compare coordinator data for change detection.
+
+        Compares the core state (alarm data, availability, group alarms).
+        Skips functions, response_data, groups, user_groups (supplementary data).
+        """
+        if not isinstance(other, PreComCoordinatorData):
+            return False
+        return (
+            self.alarm_id == other.alarm_id
+            and self.text == other.text
+            and self.timestamp == other.timestamp
+            and self.is_available == other.is_available
+            and self.not_available_timestamp == other.not_available_timestamp
+            and self.not_available_scheduled == other.not_available_scheduled
+            and self.adres == other.adres
+            and self.group_alarms == other.group_alarms
+        )
+
 
 class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
     """Polls PreCom every scan_interval seconds.
@@ -136,12 +175,14 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
             _LOGGER,
             name=DOMAIN,
             update_interval=timedelta(seconds=scan_interval) if scan_interval else None,
+            always_update=False,
         )
         self._entry = entry
         self.client = client
         self.htmlscraper = htmlscraper
         self.geocoder = geocoder
         self._unavailable = False
+        self._previous_data: PreComCoordinatorData | None = None
 
     async def _fetch_alarms(self) -> list[dict]:
         """Fetch alarms, re-authenticating once on token rejection."""
@@ -318,19 +359,50 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                     group_id,
                     err,
                 )
-                # Create empty entry on scraping failure
-                group_alarms[group_id] = GroupAlarmData(
-                    group_id=group_id,
-                    group_label=group_label,
-                    alarm_id=STATE_NO_ALARM,
-                    text="",
-                    timestamp="",
-                    functions=[],
-                    response_data=[],
-                    benodigd=[],
-                    voorgestelde_functies=[],
-                    adres="",
-                )
+                # Try to use previous data if available
+                if (
+                    self._previous_data
+                    and group_id in self._previous_data.group_alarms
+                ):
+                    previous_alarm = self._previous_data.group_alarms[group_id]
+                    _LOGGER.debug(
+                        "Using previous alarm data for group '%s' after scraping failure",
+                        group_label,
+                    )
+                    # Keep previous data but mark as failed
+                    group_alarms[group_id] = GroupAlarmData(
+                        group_id=previous_alarm.group_id,
+                        group_label=previous_alarm.group_label,
+                        alarm_id=previous_alarm.alarm_id,
+                        text=previous_alarm.text,
+                        timestamp=previous_alarm.timestamp,
+                        functions=previous_alarm.functions,
+                        response_data=previous_alarm.response_data,
+                        benodigd=previous_alarm.benodigd,
+                        voorgestelde_functies=previous_alarm.voorgestelde_functies,
+                        adres=previous_alarm.adres,
+                        adres_detail=previous_alarm.adres_detail,
+                        scraping_failed=True,
+                    )
+                else:
+                    # No previous data - create empty entry
+                    _LOGGER.debug(
+                        "No previous data available for group '%s', creating empty entry",
+                        group_label,
+                    )
+                    group_alarms[group_id] = GroupAlarmData(
+                        group_id=group_id,
+                        group_label=group_label,
+                        alarm_id=STATE_NO_ALARM,
+                        text="",
+                        timestamp="",
+                        functions=[],
+                        response_data=[],
+                        benodigd=[],
+                        voorgestelde_functies=[],
+                        adres="",
+                        scraping_failed=True,
+                    )
                 continue
 
             if alarm_data is None:
@@ -351,6 +423,7 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                     benodigd=[],
                     voorgestelde_functies=[],
                     adres="",
+                    scraping_failed=False,
                 )
                 continue
 
@@ -410,6 +483,7 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                 voorgestelde_functies=voorgestelde_functies,
                 adres=group_adres,
                 adres_detail=group_coords,
+                scraping_failed=False,
             )
 
         _LOGGER.debug(
@@ -539,7 +613,7 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
         _LOGGER.debug("=== PreCom coordinator update completed successfully ===")
         adres = _extract_adres(text)
         coords = await self.geocoder.geocode(adres) if adres else None
-        return PreComCoordinatorData(
+        new_data = PreComCoordinatorData(
             alarm_id=alarm_id,
             functions=functions,
             text=text,
@@ -556,6 +630,9 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
             user_groups=user_groups,
             group_alarms=group_alarms,
         )
+        # Store previous data for fallback on next failure
+        self._previous_data = new_data
+        return new_data
 
     async def async_set_unavailable(self, hours: int) -> None:
         """Call set_unavailable on the API client with token-refresh retry."""

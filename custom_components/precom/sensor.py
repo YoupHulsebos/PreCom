@@ -233,6 +233,25 @@ class PreComGroupAlarmSensor(CoordinatorEntity[PreComCoordinator], SensorEntity)
         )
 
     @property
+    def available(self) -> bool:
+        """Return True if the sensor data is valid and scraping succeeded.
+        
+        Returns False if:
+        - Coordinator has no data (startup or total failure)
+        - Group not found in coordinator data
+        - Portal scraping failed for this group
+        """
+        if not self.coordinator.last_update_success:
+            return False
+        if self.coordinator.data is None:
+            return False
+        group_alarm = self.coordinator.data.group_alarms.get(self._group_id)
+        if group_alarm is None:
+            return False
+        # Mark unavailable if portal scraping failed
+        return not group_alarm.scraping_failed
+
+    @property
     def name(self) -> str:
         """Return the name of the sensor based on the group label."""
         if self.coordinator.data is None:
