@@ -13,8 +13,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     ATTR_ALARM_ID,
-    ATTR_ADDRESS,
-    ATTR_ADDRESS_DETAIL,
     ATTR_BENODIGD,
     ATTR_COORDINATES,
     ATTR_FUNCTIONS,
@@ -131,10 +129,8 @@ class PreComLastAlarmSensor(CoordinatorEntity[PreComCoordinator], SensorEntity):
         return {
             ATTR_ALARM_ID: self.coordinator.data.alarm_id,
             ATTR_TEXT: self.coordinator.data.text,
-            ATTR_ADDRESS: self.coordinator.data.adres,
             ATTR_LOCATION: self.coordinator.data.location,
             ATTR_COORDINATES: self.coordinator.data.coordinates,
-            ATTR_ADDRESS_DETAIL: self.coordinator.data.adres_detail,
             ATTR_TIMESTAMP: self.coordinator.data.timestamp,
             ATTR_FUNCTIONS: self.coordinator.data.functions,
             ATTR_FUNCTIONS_FORMATTED: self._format_functions(
@@ -286,10 +282,8 @@ class PreComGroupAlarmSensor(CoordinatorEntity[PreComCoordinator], SensorEntity)
         return {
             ATTR_ALARM_ID: group_alarm.alarm_id,
             ATTR_TEXT: group_alarm.text,
-            ATTR_ADDRESS: group_alarm.adres,
-            ATTR_LOCATION: "",
-            ATTR_COORDINATES: None,
-            ATTR_ADDRESS_DETAIL: group_alarm.adres_detail,
+            ATTR_LOCATION: group_alarm.location,
+            ATTR_COORDINATES: group_alarm.coordinates,
             ATTR_TIMESTAMP: group_alarm.timestamp,
             ATTR_FUNCTIONS: group_alarm.functions,
             ATTR_RESPONSE_DATA: group_alarm.response_data,
