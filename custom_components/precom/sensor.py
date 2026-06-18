@@ -288,7 +288,7 @@ class PreComGroupAlarmSensor(CoordinatorEntity[PreComCoordinator], SensorEntity)
             ATTR_TEXT: group_alarm.text,
             ATTR_ADDRESS: group_alarm.adres,
             ATTR_LOCATION: "",
-            ATTR_COORDINATES: "",
+            ATTR_COORDINATES: None,
             ATTR_ADDRESS_DETAIL: group_alarm.adres_detail,
             ATTR_TIMESTAMP: group_alarm.timestamp,
             ATTR_FUNCTIONS: group_alarm.functions,
