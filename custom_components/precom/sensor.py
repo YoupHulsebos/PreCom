@@ -16,12 +16,14 @@ from .const import (
     ATTR_ADDRESS,
     ATTR_ADDRESS_DETAIL,
     ATTR_BENODIGD,
+    ATTR_COORDINATES,
     ATTR_FUNCTIONS,
     ATTR_FUNCTIONS_FORMATTED,
     ATTR_GROUP_ID,
     ATTR_GROUP_LABEL,
     ATTR_GROUPS,
     ATTR_LAST_UPDATED,
+    ATTR_LOCATION,
     ATTR_RESPONSE_DATA,
     ATTR_TEXT,
     ATTR_TIMESTAMP,
@@ -130,6 +132,8 @@ class PreComLastAlarmSensor(CoordinatorEntity[PreComCoordinator], SensorEntity):
             ATTR_ALARM_ID: self.coordinator.data.alarm_id,
             ATTR_TEXT: self.coordinator.data.text,
             ATTR_ADDRESS: self.coordinator.data.adres,
+            ATTR_LOCATION: self.coordinator.data.location,
+            ATTR_COORDINATES: self.coordinator.data.coordinates,
             ATTR_ADDRESS_DETAIL: self.coordinator.data.adres_detail,
             ATTR_TIMESTAMP: self.coordinator.data.timestamp,
             ATTR_FUNCTIONS: self.coordinator.data.functions,
@@ -279,10 +283,25 @@ class PreComGroupAlarmSensor(CoordinatorEntity[PreComCoordinator], SensorEntity)
         group_alarm = self.coordinator.data.group_alarms.get(self._group_id)
         if group_alarm is None:
             return {}
+
+        # Reuse API location metadata when this group alarm is the same
+        # message as the globally latest alarm.
+        location = ""
+        coordinates = None
+        if (
+            group_alarm.text
+            and self.coordinator.data.text
+            and group_alarm.text.strip() == self.coordinator.data.text.strip()
+        ):
+            location = self.coordinator.data.location
+            coordinates = self.coordinator.data.coordinates
+
         return {
             ATTR_ALARM_ID: group_alarm.alarm_id,
             ATTR_TEXT: group_alarm.text,
             ATTR_ADDRESS: group_alarm.adres,
+            ATTR_LOCATION: location,
+            ATTR_COORDINATES: coordinates,
             ATTR_ADDRESS_DETAIL: group_alarm.adres_detail,
             ATTR_TIMESTAMP: group_alarm.timestamp,
             ATTR_FUNCTIONS: group_alarm.functions,
