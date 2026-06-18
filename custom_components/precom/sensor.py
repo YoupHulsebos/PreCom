@@ -283,12 +283,25 @@ class PreComGroupAlarmSensor(CoordinatorEntity[PreComCoordinator], SensorEntity)
         group_alarm = self.coordinator.data.group_alarms.get(self._group_id)
         if group_alarm is None:
             return {}
+
+        # Reuse API location metadata when this group alarm is the same
+        # message as the globally latest alarm.
+        location = ""
+        coordinates = None
+        if (
+            group_alarm.text
+            and self.coordinator.data.text
+            and group_alarm.text.strip() == self.coordinator.data.text.strip()
+        ):
+            location = self.coordinator.data.location
+            coordinates = self.coordinator.data.coordinates
+
         return {
             ATTR_ALARM_ID: group_alarm.alarm_id,
             ATTR_TEXT: group_alarm.text,
             ATTR_ADDRESS: group_alarm.adres,
-            ATTR_LOCATION: "",
-            ATTR_COORDINATES: None,
+            ATTR_LOCATION: location,
+            ATTR_COORDINATES: coordinates,
             ATTR_ADDRESS_DETAIL: group_alarm.adres_detail,
             ATTR_TIMESTAMP: group_alarm.timestamp,
             ATTR_FUNCTIONS: group_alarm.functions,
