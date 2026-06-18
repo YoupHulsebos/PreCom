@@ -59,47 +59,6 @@ def parse_coordinates(value: str) -> dict[str, float] | None:
         return None
 
 
-def normalize_alarm_text(value: str) -> str:
-    """Collapse whitespace so alarm texts compare reliably across sources."""
-    return " ".join(value.split())
-
-
-def parse_alarm_timestamp(value: str) -> datetime | None:
-    """Parse an ISO-like timestamp and attach UTC when timezone info is absent."""
-    if not value:
-        return None
-
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
-
-def is_same_alarm_candidate(
-    app_text: str,
-    app_timestamp: str,
-    group_text: str,
-    group_timestamp: str,
-    max_delta_seconds: int = 300,
-) -> bool:
-    """Return True when app and group alarms are likely the same incident."""
-    normalized_app_text = normalize_alarm_text(app_text)
-    normalized_group_text = normalize_alarm_text(group_text)
-    if not normalized_app_text or normalized_app_text != normalized_group_text:
-        return False
-
-    app_dt = parse_alarm_timestamp(app_timestamp)
-    group_dt = parse_alarm_timestamp(group_timestamp)
-    if app_dt is None or group_dt is None:
-        return True
-
-    return abs((app_dt - group_dt).total_seconds()) <= max_delta_seconds
-
-
 # Internal alias used within this module.
 _extract_adres = extract_adres
 
@@ -118,8 +77,8 @@ class GroupAlarmData:
         response_data: list[dict[str, Any]],
         benodigd: list[dict[str, Any]],
         voorgestelde_functies: list[dict[str, Any]],
-        location: str = "",
-        coordinates: dict[str, float] | None = None,
+        adres: str = "",
+        adres_detail: dict | None = None,
         scraping_failed: bool = False,
     ) -> None:
         self.group_id = group_id
@@ -131,16 +90,16 @@ class GroupAlarmData:
         self.response_data = response_data
         self.benodigd = benodigd
         self.voorgestelde_functies = voorgestelde_functies
-        self.location = location      # location inherited from API when matched
-        self.coordinates = coordinates  # coordinates inherited from API when matched
+        self.adres = adres            # address extracted from alarm text
+        self.adres_detail = adres_detail  # full Nominatim result, or None
         self.scraping_failed = scraping_failed  # True if portal scraping failed
 
     def __eq__(self, other: object) -> bool:
         """Compare alarm data for change detection.
 
-        Compares the core alarm state (group_id, alarm_id, text, timestamp, location).
+        Compares the core alarm state (group_id, alarm_id, text, timestamp, adres).
         Skips functions (not from portal), response_data/benodigd/voorgestelde_functies
-        (order may vary, enriched asynchronously), coordinates (geocoding can vary),
+        (order may vary, enriched asynchronously), adres_detail (geocoding can vary),
         and scraping_failed (status flag, not alarm content).
         """
         if not isinstance(other, GroupAlarmData):
@@ -150,8 +109,7 @@ class GroupAlarmData:
             and self.alarm_id == other.alarm_id
             and self.text == other.text
             and self.timestamp == other.timestamp
-            and self.location == other.location
-            and self.coordinates == other.coordinates
+            and self.adres == other.adres
         )
 
 
@@ -173,6 +131,8 @@ class PreComCoordinatorData:
         groups: list[dict[str, Any]],
         user_groups: list[dict[str, Any]],
         group_alarms: dict[str, GroupAlarmData],
+        adres: str = "",
+        adres_detail: dict | None = None,
         location: str = "",
         coordinates: dict[str, float] | None = None,
     ) -> None:
@@ -183,6 +143,8 @@ class PreComCoordinatorData:
         self.response_data = response_data
         self.benodigd = benodigd
         self.voorgestelde_functies = voorgestelde_functies
+        self.adres = adres            # address extracted from alarm text
+        self.adres_detail = adres_detail  # full Nominatim result, or None
         self.location = location      # location string as provided by the API
         self.coordinates = coordinates  # coordinates dict parsed from the API
         self.is_available = is_available              # True when user is available
@@ -207,6 +169,7 @@ class PreComCoordinatorData:
             and self.is_available == other.is_available
             and self.not_available_timestamp == other.not_available_timestamp
             and self.not_available_scheduled == other.not_available_scheduled
+            and self.adres == other.adres
             and self.location == other.location
             and self.coordinates == other.coordinates
             and self.group_alarms == other.group_alarms
@@ -371,38 +334,6 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
             _LOGGER.info("PreCom API connection restored")
             self._unavailable = False
 
-    def _merge_latest_alarm_context_into_group_alarms(
-        self,
-        group_alarms: dict[str, GroupAlarmData],
-        text: str,
-        timestamp: str,
-        location: str,
-        coordinates: dict[str, float] | None,
-    ) -> dict[str, GroupAlarmData]:
-        """Copy app-only location fields into matching group alarms."""
-        if not location and coordinates is None:
-            return group_alarms
-
-        for group_id, group_alarm in group_alarms.items():
-            if group_alarm.alarm_id == STATE_NO_ALARM:
-                continue
-
-            if is_same_alarm_candidate(
-                text,
-                timestamp,
-                group_alarm.text,
-                group_alarm.timestamp,
-            ):
-                group_alarm.location = location
-                group_alarm.coordinates = coordinates
-                _LOGGER.debug(
-                    "Merged latest app alarm location into group '%s' (ID=%s)",
-                    group_alarm.group_label,
-                    group_id,
-                )
-
-        return group_alarms
-
     async def _build_group_alarms(
         self,
         user_groups: list[dict],
@@ -473,8 +404,8 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                         response_data=previous_alarm.response_data,
                         benodigd=previous_alarm.benodigd,
                         voorgestelde_functies=previous_alarm.voorgestelde_functies,
-                        location=previous_alarm.location,
-                        coordinates=previous_alarm.coordinates,
+                        adres=previous_alarm.adres,
+                        adres_detail=previous_alarm.adres_detail,
                         scraping_failed=True,
                     )
                 else:
@@ -493,8 +424,7 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                         response_data=[],
                         benodigd=[],
                         voorgestelde_functies=[],
-                        location="",
-                        coordinates=None,
+                        adres="",
                         scraping_failed=True,
                     )
                 continue
@@ -516,8 +446,7 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                     response_data=[],
                     benodigd=[],
                     voorgestelde_functies=[],
-                    location="",
-                    coordinates=None,
+                    adres="",
                     scraping_failed=False,
                 )
                 continue
@@ -576,8 +505,8 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                 response_data=response_data,
                 benodigd=benodigd,
                 voorgestelde_functies=voorgestelde_functies,
-                location=group_adres,
-                coordinates=group_coords,
+                adres=group_adres,
+                adres_detail=group_coords,
                 scraping_failed=False,
             )
 
@@ -642,6 +571,7 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                 response_data=[],
                 benodigd=[],
                 voorgestelde_functies=[],
+                adres="",
                 location="",
                 coordinates=None,
                 is_available=is_available,
@@ -655,8 +585,7 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
         latest = alarms[0]
         alarm_id = str(latest.get("MsgInID", STATE_NO_ALARM))
         text = str(latest.get("Text", ""))
-        extracted_location = _extract_adres(text)
-        location = str(latest.get("Location", "") or "") or extracted_location
+        location = str(latest.get("Location", "") or "")
         coordinates = parse_coordinates(str(latest.get("Coordinates", "") or ""))
         _LOGGER.debug("Processing latest alarm: MsgInID=%s, Text='%s'", alarm_id, text[:100] if text else "")
 
@@ -710,16 +639,8 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                 )
 
         _LOGGER.debug("=== PreCom coordinator update completed successfully ===")
-        coords = coordinates or (await self.geocoder.geocode(location) if location else None)
-        group_alarms = self._merge_latest_alarm_context_into_group_alarms(
-            group_alarms,
-            text,
-            timestamp,
-            location,
-            coordinates,
-        )
-        if coordinates is None:
-            coordinates = coords
+        adres = _extract_adres(text)
+        coords = await self.geocoder.geocode(adres) if adres else None
         new_data = PreComCoordinatorData(
             alarm_id=alarm_id,
             functions=functions,
@@ -728,6 +649,8 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
             response_data=response_data,
             benodigd=benodigd,
             voorgestelde_functies=voorgestelde_functies,
+            adres=adres,
+            adres_detail=coords,
             location=location,
             coordinates=coordinates,
             is_available=is_available,

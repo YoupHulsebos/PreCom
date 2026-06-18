@@ -46,6 +46,8 @@ STATE_NO_ALARM = "none"
 
 # Sensor extra attribute keys
 ATTR_ALARM_ID = "alarm_id"
+ATTR_ADDRESS = "adres"
+ATTR_ADDRESS_DETAIL = "adres_detail"
 ATTR_LOCATION = "location"
 ATTR_COORDINATES = "coordinates"
 ATTR_FUNCTIONS = "functions"
