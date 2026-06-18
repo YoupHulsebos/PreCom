@@ -148,11 +148,21 @@ def _make_geocode_melding_handler(hass: HomeAssistant):
             )
 
         coordinator = entries[0].runtime_data
-        adres = _extract_adres(melding)
-        if not adres:
-            return {"adres": "", "adres_detail": None}
+        location = _extract_adres(melding)
+        if not location:
+            return {"location": "", "coordinates": None}
 
-        detail = await coordinator.geocoder.geocode(adres)
-        return {"adres": adres, "adres_detail": detail}
+        detail = await coordinator.geocoder.geocode(location)
+        coordinates = None
+        if detail:
+            latitude = detail.get("lat")
+            longitude = detail.get("lon")
+            if latitude is not None and longitude is not None:
+                coordinates = {
+                    "latitude": float(latitude),
+                    "longitude": float(longitude),
+                }
+
+        return {"location": location, "coordinates": coordinates}
 
     return _handle
