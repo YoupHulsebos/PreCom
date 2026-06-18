@@ -115,6 +115,8 @@ class PreComCoordinatorData:
         group_alarms: dict[str, GroupAlarmData],
         adres: str = "",
         adres_detail: dict | None = None,
+        location: str = "",
+        coordinates: str = "",
     ) -> None:
         self.alarm_id = alarm_id      # alarm ID string, or STATE_NO_ALARM
         self.functions = functions    # list of {label: str, users: list[str]}
@@ -125,6 +127,8 @@ class PreComCoordinatorData:
         self.voorgestelde_functies = voorgestelde_functies
         self.adres = adres            # address extracted from alarm text
         self.adres_detail = adres_detail  # full Nominatim result, or None
+        self.location = location      # location string as provided by the API
+        self.coordinates = coordinates  # coordinates string as provided by the API
         self.is_available = is_available              # True when user is available
         self.not_available_timestamp = not_available_timestamp  # ISO ts of unavailability
         self.not_available_scheduled = not_available_scheduled  # scheduled absence
@@ -148,6 +152,8 @@ class PreComCoordinatorData:
             and self.not_available_timestamp == other.not_available_timestamp
             and self.not_available_scheduled == other.not_available_scheduled
             and self.adres == other.adres
+            and self.location == other.location
+            and self.coordinates == other.coordinates
             and self.group_alarms == other.group_alarms
         )
 
@@ -548,6 +554,8 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
                 benodigd=[],
                 voorgestelde_functies=[],
                 adres="",
+                location="",
+                coordinates="",
                 is_available=is_available,
                 not_available_timestamp=not_available_timestamp,
                 not_available_scheduled=not_available_scheduled,
@@ -559,6 +567,8 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
         latest = alarms[0]
         alarm_id = str(latest.get("MsgInID", STATE_NO_ALARM))
         text = str(latest.get("Text", ""))
+        location = str(latest.get("Location", "") or "")
+        coordinates = str(latest.get("Coordinates", "") or "")
         _LOGGER.debug("Processing latest alarm: MsgInID=%s, Text='%s'", alarm_id, text[:100] if text else "")
 
         # The API returns Timestamp as an ISO 8601 date-time string.
@@ -623,6 +633,8 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
             voorgestelde_functies=voorgestelde_functies,
             adres=adres,
             adres_detail=coords,
+            location=location,
+            coordinates=coordinates,
             is_available=is_available,
             not_available_timestamp=not_available_timestamp,
             not_available_scheduled=not_available_scheduled,
