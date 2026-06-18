@@ -149,10 +149,33 @@ def _make_geocode_melding_handler(hass: HomeAssistant):
 
         coordinator = entries[0].runtime_data
         adres = _extract_adres(melding)
+        
+        # Build base response with Nominatim geocoding
+        response: dict[str, Any] = {
+            "adres": adres,
+            "adres_detail": None,
+            "location": None,
+            "coordinates": None,
+            "is_latest_alarm": False,
+        }
+        
         if not adres:
-            return {"adres": "", "adres_detail": None}
+            return response
 
         detail = await coordinator.geocoder.geocode(adres)
-        return {"adres": adres, "adres_detail": detail}
+        response["adres_detail"] = detail
+
+        # Check if the given melding matches the latest alarm from PreCom
+        if coordinator.data and coordinator.data.text.strip() == melding:
+            # Same alarm - include PreCom location and coordinates
+            response["location"] = coordinator.data.location or None
+            response["coordinates"] = coordinator.data.coordinates
+            response["is_latest_alarm"] = True
+            _LOGGER.debug(
+                "Melding matches latest alarm (ID=%s), including PreCom location/coordinates",
+                coordinator.data.alarm_id,
+            )
+
+        return response
 
     return _handle

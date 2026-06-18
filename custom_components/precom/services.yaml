@@ -58,6 +58,8 @@ geocode_melding:
   description: >
     Extract the address from a P2000 alarm message text and return the full
     Nominatim geocoding result (including lat, lon, display_name, etc.).
+    Also retrieves the latest alarm from PreCom and, if it matches the given
+    message text, includes the PreCom Location and Coordinates in the response.
   fields:
     melding:
       name: Melding
