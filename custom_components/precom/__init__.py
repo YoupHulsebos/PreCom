@@ -126,10 +126,27 @@ def _make_get_alarm_portal_details_handler(hass: HomeAssistant):
                 f"Could not fetch PreCom portal details for '{melding}': {err}"
             ) from err
 
+        # Also run geocoding so the caller gets a complete picture in one call.
+        adres = _extract_adres(melding)
+        adres_detail = await coordinator.geocoder.geocode(adres) if adres else None
+
+        location = None
+        coordinates = None
+        is_latest_alarm = False
+        if coordinator.data and coordinator.data.text.strip() == melding:
+            location = coordinator.data.location or None
+            coordinates = coordinator.data.coordinates
+            is_latest_alarm = True
+
         return {
             "response_data": details.get("response_data", []),
             "benodigd": details.get("benodigd", []),
             "voorgestelde_functies": details.get("voorgestelde_functies", []),
+            "adres": adres,
+            "adres_detail": adres_detail,
+            "location": location,
+            "coordinates": coordinates,
+            "is_latest_alarm": is_latest_alarm,
         }
 
     return _handle
