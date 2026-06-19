@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import aiohttp
@@ -9,6 +10,29 @@ import aiohttp
 _LOGGER = logging.getLogger(__name__)
 
 _NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+
+# Regex to extract the address from a P2000-style alarm message text.
+# Named group 'adres' captures the address portion between the incident type and the postcode.
+_ADRES_RE = re.compile(
+    r"^P\s+\d+(?:\s+[A-Z]{3}-\d+)?\s+(?:\([^)]*\)\s+)*"
+    r"(?:Reanimatie|Ass\.\s+Ambu|BR\s+(?:berm\/bosschage|buiten\s+industrie|afval|woning|bos|bijgebouw|wegvervoer|gebouw|container|gezondheidszorg|industrie)"
+    r"|Nacontrole|Ongeval\s+(?:wegvervoer|gev\.\s+stof)|Liftopsluiting|PAC\s+brandmelding"
+    r"|OMS\s+(?:brandmelding|handmelder)|CO-melder|Persoon\s+te\s+water|Voertuig\s+te\s+water"
+    r"|Dier\s+(?:in\s+problemen|in\s+put\/kelder|in\/op\s+ijs|op\s+hoogte|te\s+water)"
+    r"|Buitensluiting|Stank\/hind\.\s+lucht|Brandgerucht|Wateroverlast|Vervuild\s+wegdek"
+    r"|Stormschade|Ongeval\s+VVE|Dienstverlening)"
+    r"(?:\s+\([^)]*\))*\s+(?P<adres>.+?)(?:\s+\d{6})*\s*$"
+)
+
+
+def extract_adres(text: str) -> str:
+    """Return the address extracted from a P2000 alarm text, or empty string."""
+    if not text:
+        return ""
+    m = _ADRES_RE.match(text)
+    if m:
+        return m.group("adres")
+    return ""
 # Nominatim ToS: identify the application in the User-Agent header.
 _USER_AGENT = "HomeAssistant-PreCom/1.0 (https://github.com/yourusername/hacs-precom)"
 
@@ -26,6 +50,15 @@ class PreComGeocoder:
         # Maps normalised address string -> (lat, lon, detail) or None when
         # a previous lookup returned no results.
         self._cache: dict[str, dict[str, Any] | None] = {}
+
+    async def geocode_melding(self, melding: str) -> dict[str, Any]:
+        """Extract the address from a P2000 alarm text, geocode it, and return both.
+
+        Returns a dict with ``adres`` (str) and ``adres_detail`` (Nominatim result or None).
+        """
+        adres = extract_adres(melding)
+        adres_detail = await self.geocode(adres) if adres else None
+        return {"adres": adres, "adres_detail": adres_detail}
 
     async def geocode(self, address: str) -> dict[str, Any] | None:
         """Return the raw Nominatim result dict for *address*, or None on failure/no result.
