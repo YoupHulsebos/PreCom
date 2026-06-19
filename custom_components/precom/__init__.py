@@ -19,7 +19,7 @@ from .const import (
     SERVICE_GET_ALARM_PORTAL_DETAILS,
     SERVICE_GEOCODE_MELDING,
 )
-from .coordinator import PreComCoordinator, extract_adres as _extract_adres
+from .coordinator import PreComCoordinator
 from .geocoder import PreComGeocoder
 from .htmlscraper import PreComHtmlScraper, PreComPortalError
 
@@ -126,27 +126,13 @@ def _make_get_alarm_portal_details_handler(hass: HomeAssistant):
                 f"Could not fetch PreCom portal details for '{melding}': {err}"
             ) from err
 
-        # Also run geocoding so the caller gets a complete picture in one call.
-        adres = _extract_adres(melding)
-        adres_detail = await coordinator.geocoder.geocode(adres) if adres else None
-
-        location = None
-        coordinates = None
-        is_latest_alarm = False
-        if coordinator.data and coordinator.data.text.strip() == melding:
-            location = coordinator.data.location or None
-            coordinates = coordinator.data.coordinates
-            is_latest_alarm = True
+        geo = await coordinator.geocode_melding(melding)
 
         return {
             "response_data": details.get("response_data", []),
             "benodigd": details.get("benodigd", []),
             "voorgestelde_functies": details.get("voorgestelde_functies", []),
-            "adres": adres,
-            "adres_detail": adres_detail,
-            "location": location,
-            "coordinates": coordinates,
-            "is_latest_alarm": is_latest_alarm,
+            **geo,
         }
 
     return _handle
@@ -165,34 +151,6 @@ def _make_geocode_melding_handler(hass: HomeAssistant):
             )
 
         coordinator = entries[0].runtime_data
-        adres = _extract_adres(melding)
-        
-        # Build base response with Nominatim geocoding
-        response: dict[str, Any] = {
-            "adres": adres,
-            "adres_detail": None,
-            "location": None,
-            "coordinates": None,
-            "is_latest_alarm": False,
-        }
-        
-        if not adres:
-            return response
-
-        detail = await coordinator.geocoder.geocode(adres)
-        response["adres_detail"] = detail
-
-        # Check if the given melding matches the latest alarm from PreCom
-        if coordinator.data and coordinator.data.text.strip() == melding:
-            # Same alarm - include PreCom location and coordinates
-            response["location"] = coordinator.data.location or None
-            response["coordinates"] = coordinator.data.coordinates
-            response["is_latest_alarm"] = True
-            _LOGGER.debug(
-                "Melding matches latest alarm (ID=%s), including PreCom location/coordinates",
-                coordinator.data.alarm_id,
-            )
-
-        return response
+        return await coordinator.geocode_melding(melding)
 
     return _handle

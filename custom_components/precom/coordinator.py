@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
@@ -12,33 +11,10 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import PreComApiClient, PreComAuthError, PreComApiError
 from .const import DOMAIN, STATE_NO_ALARM
-from .geocoder import PreComGeocoder
+from .geocoder import PreComGeocoder, extract_adres
 from .htmlscraper import PreComHtmlScraper, PreComPortalError
 
 _LOGGER = logging.getLogger(__name__)
-
-# Regex to extract the address from a P2000-style alarm message text.
-# Named group 'adres' captures the address portion between the incident type and the postcode.
-_ADRES_RE = re.compile(
-    r"^P\s+\d+(?:\s+[A-Z]{3}-\d+)?\s+(?:\([^)]*\)\s+)*"
-    r"(?:Reanimatie|Ass\.\s+Ambu|BR\s+(?:berm\/bosschage|buiten\s+industrie|afval|woning|bos|bijgebouw|wegvervoer|gebouw|container|gezondheidszorg|industrie)"
-    r"|Nacontrole|Ongeval\s+(?:wegvervoer|gev\.\s+stof)|Liftopsluiting|PAC\s+brandmelding"
-    r"|OMS\s+(?:brandmelding|handmelder)|CO-melder|Persoon\s+te\s+water|Voertuig\s+te\s+water"
-    r"|Dier\s+(?:in\s+problemen|in\s+put\/kelder|in\/op\s+ijs|op\s+hoogte|te\s+water)"
-    r"|Buitensluiting|Stank\/hind\.\s+lucht|Brandgerucht|Wateroverlast|Vervuild\s+wegdek"
-    r"|Stormschade|Ongeval\s+VVE|Dienstverlening)"
-    r"(?:\s+\([^)]*\))*\s+(?P<adres>.+?)(?:\s+\d{6})*\s*$"
-)
-
-
-def extract_adres(text: str) -> str:
-    """Return the address extracted from a P2000 alarm text, or empty string."""
-    if not text:
-        return ""
-    m = _ADRES_RE.match(text)
-    if m:
-        return m.group("adres")
-    return ""
 
 
 def parse_coordinates(value: str) -> dict[str, float] | None:
@@ -61,6 +37,7 @@ def parse_coordinates(value: str) -> dict[str, float] | None:
 
 # Internal alias used within this module.
 _extract_adres = extract_adres
+
 
 
 class GroupAlarmData:
@@ -679,3 +656,42 @@ class PreComCoordinator(DataUpdateCoordinator[PreComCoordinatorData]):
         except PreComAuthError:
             await self.client.authenticate()
             await self.client.set_available()
+
+    async def geocode_melding(self, melding: str) -> dict[str, Any]:
+        """Resolve a P2000 alarm message text to geocoding + live PreCom alarm data.
+
+        Always performs a live API call so the result is never based on stale
+        cached coordinator data.  Returns a dict with:
+        - ``adres``           — address extracted from *melding* (empty string if not found)
+        - ``adres_detail``    — raw Nominatim result, or None
+        - ``location``        — PreCom API location string (only when alarm matches)
+        - ``coordinates``     — parsed lat/lon dict from PreCom API (only when alarm matches)
+        - ``is_latest_alarm`` — True when *melding* matches the live latest alarm
+        """
+        geo = await self.geocoder.geocode_melding(melding)
+
+        location: str | None = None
+        coordinates: dict[str, float] | None = None
+        is_latest_alarm = False
+
+        try:
+            alarms = await self._fetch_alarms()
+        except (PreComAuthError, PreComApiError) as err:
+            _LOGGER.debug("geocode_melding: live alarm fetch failed: %s", err)
+            alarms = []
+
+        if alarms and str(alarms[0].get("Text", "")).strip() == melding:
+            location = str(alarms[0].get("Location", "") or "") or None
+            coordinates = parse_coordinates(str(alarms[0].get("Coordinates", "") or ""))
+            is_latest_alarm = True
+            _LOGGER.debug(
+                "geocode_melding: melding matches live alarm (ID=%s)",
+                alarms[0].get("MsgInID", ""),
+            )
+
+        return {
+            **geo,
+            "location": location,
+            "coordinates": coordinates,
+            "is_latest_alarm": is_latest_alarm,
+        }
